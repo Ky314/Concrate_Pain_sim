@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CONCRETE TAGGER — コンクリート壁の落書き文字ジェネレーター</title>
+<style>
+:root{--bg:#141414;--panel:#1d1d1d;--line:#333;--ink:#eee;--mute:#9a9a9a;--spray:#ffd60a;--hot:#ff3d7f}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Hiragino Sans","Yu Gothic",Meiryo,sans-serif}
+header{padding:20px clamp(14px,4vw,40px) 6px}
+h1{margin:0;font-family:"Rubik Spray Paint","Permanent Marker",Impact,sans-serif;font-weight:400;font-size:clamp(26px,5vw,44px);letter-spacing:.04em;color:var(--spray);text-shadow:3px 3px 0 #000}
+header p{margin:4px 0 0;color:var(--mute);font-size:14px}
+main{padding:12px clamp(14px,4vw,40px) 40px;max-width:1400px;margin:0 auto}
+.stage{position:relative;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#000;box-shadow:0 10px 40px #0008}
+canvas#wall{display:block;width:100%;height:auto}
+#busy{position:absolute;left:12px;bottom:12px;background:#000c;color:var(--spray);padding:6px 12px;border-radius:20px;font-size:13px;display:none}
+#busy.on{display:block}
+.panel{display:grid;grid-template-columns:minmax(260px,1.2fr) minmax(260px,1fr);gap:16px;margin-top:16px}
+@media(max-width:820px){.panel{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+.card h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;color:var(--mute);font-weight:600}
+textarea{width:100%;min-height:92px;resize:vertical;background:#0e0e0e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:20px;line-height:1.35;font-family:inherit}
+textarea:focus{outline:2px solid var(--spray);border-color:transparent}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+button{cursor:pointer;border:1px solid #555;background:#262626;color:var(--ink);border-radius:6px;padding:9px 14px;font-size:14px;font-family:inherit}
+button:hover{border-color:var(--spray)}
+button.primary{background:var(--spray);color:#111;border-color:var(--spray);font-weight:700}
+.ctl{display:grid;grid-template-columns:96px 1fr 52px;align-items:center;gap:8px;margin:9px 0;font-size:13px;color:#ccc}
+.ctl output{color:var(--spray);text-align:right;font-variant-numeric:tabular-nums}
+.ctl2{display:flex;align-items:center;gap:8px;margin:9px 0;font-size:13px;color:#ccc;flex-wrap:wrap}
+select,input[type=color]{background:#0e0e0e;color:#fff;border:1px solid #444;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit}
+input[type=color]{padding:0;width:38px;height:30px}
+input[type=range]{accent-color:var(--spray);width:100%}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:#ccc;margin:10px 0}
+.chk input{margin-top:3px;accent-color:var(--spray)}
+#recog{display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow:auto}
+.chip{background:#101010;border:1px solid #333;border-radius:6px;padding:5px 8px;font-size:12px;line-height:1.35;min-width:84px}
+.chip b{font-size:16px;color:#fff;margin-right:4px}
+.chip.ok{border-color:#2f7d46}.chip.ng{border-color:#a8452f}
+.chip small{display:block;color:var(--mute);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.note{font-size:12px;color:var(--mute);line-height:1.6;margin-top:8px}
+.sum{font-size:13px;color:#ccc;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>CONCRETE TAGGER</h1>
+  <p>文字を入力すると、コンクリートの壁にスプレー落書きを生成します。フォントは毎回ランダムに変形され、読める文字かを識別チェックで確認します。</p>
+</header>
+<main>
+  <div class="stage">
+    <canvas id="wall" width="1600" height="1000" aria-label="落書き文字が描かれたコンクリート壁"></canvas>
+    <div id="busy">準備中…</div>
+  </div>
+
+  <div class="panel">
+    <div class="card">
+      <h2>文字を入力</h2>
+      <textarea id="txt" maxlength="100" placeholder="ここに入力（改行OK）" spellcheck="false">GRAFFITI
+落書き</textarea>
+      <div class="row">
+        <button class="primary" id="btnRe">🎲 フォントを再ランダム</button>
+        <button id="btnWall">🧱 壁を変える</button>
+        <button id="btnSave">⬇ PNG保存</button>
+        <button id="btnCopy">📋 画像をコピー</button>
+      </div>
+      <div class="note" id="saveNote"></div>
+      <div class="ctl2" style="margin-top:14px">
+        <label>配色</label>
+        <select id="colorMode">
+          <option value="random">ランダム（1パレット）</option>
+          <option value="mix">スプレー缶ミックス</option>
+          <option value="mono">モノクロ</option>
+          <option value="custom">好きな色</option>
+        </select>
+        <input type="color" id="custom" value="#ff2e88" hidden>
+        <label style="margin-left:8px">壁</label>
+        <select id="wallKind">
+          <option value="auto">おまかせ</option>
+          <option value="clean">きれい</option>
+          <option value="cracked">ひび割れ</option>
+          <option value="stained">汚れ・雨だれ</option>
+        </select>
+      </div>
+      <div class="ctl"><label>文字サイズ</label><input type="range" id="size" min="0" max="300" step="10" value="0"><output id="sizeO">自動</output></div>
+      <div class="ctl"><label>ドリップ</label><input type="range" id="drip" min="0" max="10" step="1" value="5"><output id="dripO">5</output></div>
+      <div class="ctl"><label>崩し具合</label><input type="range" id="wild" min="0" max="10" step="1" value="6"><output id="wildO">6</output></div>
+    </div>
+
+    <div class="card">
+      <h2>文字識別チェック</h2>
+      <label class="chk"><input type="checkbox" id="useRecog" checked><span>生成した文字を識別器にかけ、読めない形になったら別のフォント・変形で自動やり直し（最大6回）</span></label>
+      <div class="sum" id="sum">—</div>
+      <div id="recog"></div>
+      <div class="note">識別器は、各文字を28×28に正規化して複数の基準書体と相関を取る軽量テンプレート照合です。入力した文字＋英数字・ひらがな・カタカナを候補にし、「その文字として最も近い」と判定された形だけを採用します。</div>
+    </div>
+  </div>
+</main>
+
+<script>
+(() => {
+'use strict';
+const W = 1600, H = 1000, MARGIN = 70;
+const $ = s => document.querySelector(s);
+const wallCv = $('#wall'), ctx = wallCv.getContext('2d');
+
+/* ---------- 乱数 ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+let rnd = Math.random;
+const R = (a,b) => a + (b-a)*rnd();
+const pick = a => a[Math.floor(rnd()*a.length)];
+const mk = (w,h) => { const c = document.createElement('canvas'); c.width = Math.max(1,Math.ceil(w)); c.height = Math.max(1,Math.ceil(h)); return c; };
+const tick = () => new Promise(r => setTimeout(r, 0));
+const isCJK = ch => /[぀-ヿ㐀-鿿ｦ-ﾟ　-〿]/.test(ch);
+
+/* ---------- 色ユーティリティ ---------- */
+function hex2rgb(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h,16);return[n>>16&255,n>>8&255,n&255]}
+function shade(h,amt){const [r,g,b]=hex2rgb(h);const t=amt<0?0:255,p=Math.abs(amt);const f=v=>Math.round(v+(t-v)*p);return `rgb(${f(r)},${f(g)},${f(b)})`}
+function lum(h){const [r,g,b]=hex2rgb(h);return(0.299*r+0.587*g+0.114*b)/255}
+
+const PALETTES = [
+  {fills:['#ff2e88','#19f0ff','#b6ff00','#ffe600'], line:'#14081f', acc:['#ffffff','#7a2cff']},
+  {fills:['#ffd400','#ff5a1f','#ffffff'],          line:'#101010', acc:['#e11d2e','#ffffff']},
+  {fills:['#2fa8ff','#8be9ff','#ffffff'],          line:'#0b1d4a', acc:['#ff3d7f','#ffffff']},
+  {fills:['#f2f2f2','#d8d8d8'],                    line:'#0e0e0e', acc:['#8a8a8a','#ffffff']},
+  {fills:['#151515','#222222'],                    line:'#f4f4f4', acc:['#ff2d2d','#f4f4f4']},
+  {fills:['#ff6b6b','#ffd93d','#6bcB77','#4d96ff'],line:'#1a1a2e', acc:['#ffffff','#ffd93d']},
+  {fills:['#9dff00','#00ffa2','#fff200'],          line:'#07210f', acc:['#ff00aa','#101010']},
+];
+
+/* ---------- フォント ---------- */
+const WEB_FONTS = [
+  {n:'Permanent Marker',jp:false,thin:false},{n:'Rock Salt',jp:false,thin:true},
+  {n:'Rubik Spray Paint',jp:false},{n:'Rubik Wet Paint',jp:false},{n:'Bangers',jp:false},
+  {n:'Sedgwick Ave Display',jp:false,thin:true},{n:'Gochi Hand',jp:false,thin:true},
+  {n:'Londrina Solid',jp:false,w:900,q:':wght@900'},{n:'Covered By Your Grace',jp:false,thin:true},
+  {n:'Dela Gothic One',jp:true},{n:'Reggae One',jp:true},{n:'RocknRoll One',jp:true},
+  {n:'Rampart One',jp:true},{n:'Yusei Magic',jp:true,thin:true},{n:'Potta One',jp:true},
+  {n:'Mochiy Pop One',jp:true},{n:'Train One',jp:true},{n:'Stick',jp:true},
+  {n:'Yuji Boku',jp:true},{n:'DotGothic16',jp:true},{n:'Hachi Maru Pop',jp:true,thin:true}
+];
+const SYS_FONTS = [
+  {n:'Impact',jp:false,w:400},{n:'Arial Black',jp:false,w:900},{n:'Brush Script MT',jp:false,w:400,thin:true},
+  {n:'Marker Felt',jp:false,w:700,thin:true},{n:'Chalkduster',jp:false,w:400,thin:true},{n:'Courier New',jp:false,w:700},
+  {n:'Hiragino Sans',jp:true,w:900},{n:'Yu Gothic',jp:true,w:900},{n:'Meiryo',jp:true,w:700},
+  {n:'Hiragino Mincho ProN',jp:true,w:900},{n:'Noto Sans JP',jp:true,w:900},{n:'Noto Sans CJK JP',jp:true,w:900}
+];
+const GENERIC = [
+  {n:'sans-serif',jp:true,w:900,generic:true},{n:'serif',jp:true,w:900,generic:true},
+  {n:'cursive',jp:false,w:700,generic:true,thin:true},{n:'fantasy',jp:false,w:700,generic:true},
+  {n:'monospace',jp:false,w:700,generic:true}
+];
+let FONTS = [...GENERIC];
+const SAFE = () => FONTS.filter(f => f.n==='sans-serif' || f.n==='Impact' || f.n==='Arial Black');
+
+function fontCss(f, size, italic){
+  const name = f.generic ? f.n : `"${f.n}"`;
+  return `${italic?'italic ':''}${f.w||400} ${size}px ${name}, sans-serif`;
+}
+function hasFont(name){
+  const c = mk(10,10).getContext('2d'); const s = 'mmmmmwwwiiIl0O漢字あア';
+  const w = f => { c.font = '64px ' + f; return c.measureText(s).width; };
+  return ['monospace','serif','sans-serif'].some(b => w(`"${name}",${b}`) !== w(b));
+}
+function loadWebFonts(){
+  const jobs = WEB_FONTS.map(f => new Promise(res => {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(f.n).replace(/%20/g,'+') + (f.q||'') + '&display=swap';
+    l.onload = () => document.fonts.load(`${f.w||400} 64px "${f.n}"`, 'Aaあ漢').then(res, res);
+    l.onerror = () => res();
+    document.head.appendChild(l);
+  }));
+  return Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, 6000))]);
+}
+const fontsReady = loadWebFonts().then(() => {
+  const web = WEB_FONTS.filter(f => hasFont(f.n));
+  const sys = SYS_FONTS.filter(f => hasFont(f.n));
+  FONTS = [...web, ...sys, ...GENERIC];
+  $('#busy').textContent = '';
+});
+
+/* ---------- 画像処理ヘルパー ---------- */
+function tint(mask,color){const c=mk(mask.width,mask.height),g=c.getContext('2d');g.drawImage(mask,0,0);g.globalCompositeOperation='source-in';g.fillStyle=color;g.fillRect(0,0,c.width,c.height);return c}
+function dilate(mask,r){
+  const c=mk(mask.width,mask.height),g=c.getContext('2d');
+  g.drawImage(mask,0,0);
+  const rings = r>4 ? [1,.66,.33] : [1,.5];
+  for(const k of rings){const n=Math.max(10,Math.round(k*r*1.2)+8);for(let i=0;i<n;i++){const a=i/n*Math.PI*2;g.drawImage(mask,Math.cos(a)*r*k,Math.sin(a)*r*k)}}
+  return c;
+}
+function softAlpha(mask,blur){ // shadowBlurでぼかしたアルファを作る（filter非対応環境でも動く）
+  const w=mask.width,c=mk(w,mask.height),g=c.getContext('2d');
+  g.shadowColor='#000';g.shadowBlur=blur;g.shadowOffsetX=w;g.drawImage(mask,-w,0);return c;
+}
+function wobble(src,amp,freq,phase,step){
+  if(amp<0.6) return src;
+  const w=src.width,h=src.height;
+  const a=mk(w,h),ag=a.getContext('2d');
+  for(let y=0;y<h;y+=step){const dx=amp*Math.sin(y*freq+phase)+amp*.5*Math.sin(y*freq*2.3+phase*1.7);ag.drawImage(src,0,y,w,step,dx,y,w,step)}
+  const b=mk(w,h),bg=b.getContext('2d');
+  for(let x=0;x<w;x+=step){const dy=amp*.8*Math.sin(x*freq*1.1+phase*.6)+amp*.4*Math.sin(x*freq*2.7+phase);bg.drawImage(a,x,0,step,h,x,dy,step,h)}
+  return b;
+}
+
+/* ---------- 識別器（28x28テンプレート照合） ---------- */
+const N = 28, MID = N*4;
+function analyze(c){
+  const w=c.width,h=c.height,d=c.getContext('2d').getImageData(0,0,w,h).data;
+  let minX=w,minY=h,maxX=-1,maxY=-1;
+  for(let y=0;y<h;y++){const row=y*w*4;for(let x=0;x<w;x++){if(d[row+x*4+3]>100){if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y}}}
+  if(maxX<0||maxX-minX<2||maxY-minY<2) return null;
+  const bw=maxX-minX+1,bh=maxY-minY+1,sc=(MID-8)/Math.max(bw,bh);
+  const m=mk(MID,MID),mg=m.getContext('2d');mg.imageSmoothingQuality='high';
+  mg.drawImage(c,minX,minY,bw,bh,(MID-bw*sc)/2,(MID-bh*sc)/2,bw*sc,bh*sc);
+  const t=mk(N,N),tg=t.getContext('2d');tg.imageSmoothingQuality='high';tg.drawImage(m,0,0,N,N);
+  const td=tg.getImageData(0,0,N,N).data,vec=new Float32Array(N*N);let mean=0;
+  for(let i=0;i<N*N;i++){vec[i]=td[i*4+3]/255;mean+=vec[i]}
+  mean/=N*N;let nrm=0;for(let i=0;i<N*N;i++){vec[i]-=mean;nrm+=vec[i]*vec[i]}
+  nrm=Math.sqrt(nrm)||1;for(let i=0;i<N*N;i++)vec[i]/=nrm;
+  return {minX,maxX,minY,maxY,vec};
+}
+const REFS = [
+  '900 {p}px sans-serif',
+  '700 {p}px serif',
+  '400 {p}px Impact, sans-serif',
+  '700 {p}px "Hiragino Sans","Yu Gothic","Meiryo","Noto Sans CJK JP",sans-serif',
+  '500 {p}px "Hiragino Mincho ProN","Yu Mincho","Noto Serif CJK JP",serif'
+];
+const tplCache = new Map();
+function template(ch){
+  if(tplCache.has(ch)) return tplCache.get(ch);
+  const vs=[];
+  for(const r of REFS){
+    const c=mk(180,180),g=c.getContext('2d');
+    g.fillStyle='#000';g.textAlign='center';g.textBaseline='alphabetic';g.font=r.replace('{p}',120);
+    g.fillText(ch,90,135);
+    const a=analyze(c);if(a)vs.push(a.vec);
+  }
+  tplCache.set(ch,vs);return vs;
+}
+const BASE_CANDS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?&#+-*']
+  .concat([...'ぁあぃいぅうぇえぉおかがきぎくぐけげこごさざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばぱひびぴふぶぷへべぺほぼぽまみむめもゃやゅゆょよらりるれろわをん'])
+  .concat([...'ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロワヲンー']);
+const GROUPS = [['o','0'],['i','l','1','I','|'],['s','5'],['z','2'],['b','6']];
+function eq(a,b){
+  if(a===b) return true;
+  const la=a.toLowerCase(),lb=b.toLowerCase();
+  if(la===lb) return true;
+  return GROUPS.some(g => g.includes(la) && g.includes(lb));
+}
+let candList = BASE_CANDS;
+function setCandidates(text){
+  const s = new Set(BASE_CANDS);
+  for(const ch of text) if(ch.trim()) s.add(ch);
+  candList = [...s];
+}
+function classify(vec,target){
+  let bestAll=-2,bestCh='',tScore=-2,oScore=-2;
+  for(const ch of candList){
+    const ts=template(ch);let sc=-2;
+    for(const t of ts){let d=0;for(let i=0;i<vec.length;i++)d+=vec[i]*t[i];if(d>sc)sc=d}
+    if(sc>bestAll){bestAll=sc;bestCh=ch}
+    if(eq(ch,target)){if(sc>tScore)tScore=sc}else if(sc>oScore)oScore=sc;
+  }
+  const margin = tScore - oScore;
+  return {guess:bestCh,tScore,margin,ok: margin>0 && tScore>=0.4};
+}
+
+/* ---------- グリフ生成 ---------- */
+function makeShape(ch,size,font,dist,GW,GH,BY){
+  const c=mk(GW,GH),g=c.getContext('2d');
+  g.save();
+  g.translate(GW/2,BY);g.rotate(dist.rot);g.transform(1,0,dist.skew,1,0,0);g.scale(dist.sx,dist.sy);
+  g.font=fontCss(font,size,dist.italic);g.textAlign='center';g.textBaseline='alphabetic';g.fillStyle='#000';g.strokeStyle='#000';
+  g.fillText(ch,0,0);
+  if(dist.thick>0.5){g.lineWidth=dist.thick;g.lineJoin=dist.join;g.strokeText(ch,0,0)}
+  g.restore();
+  return wobble(c,dist.wobAmp,dist.wobFreq,dist.wobPh,Math.max(2,Math.round(size/50)));
+}
+
+function paintGlyph(mask,an,size,pal,dripAmt){
+  const w=mask.width,h=mask.height,out=mk(w,h),o=out.getContext('2d');
+  const fill=pick(pal.fills),line=pal.line,acc=pick(pal.acc),u=size/200;
+  const cfg={
+    ring1: rnd()<.82 ? size*R(.028,.05):0,
+    ring2: rnd()<.4 ? size*R(.05,.09):0,
+    ext:   rnd()<.35 ? size*R(.05,.1):0,
+    shadow:rnd()<.55, hi:rnd()<.75
+  };
+  let sil=mask;const stack=[];
+  if(cfg.ring1){const m=dilate(mask,cfg.ring1);stack.push([m,line]);sil=m}
+  if(cfg.ring2){const m=dilate(sil,cfg.ring2);stack.push([m,acc]);sil=m}
+  const outerCol = stack.length ? stack[stack.length-1][1] : fill;
+  if(cfg.shadow){o.globalAlpha=.5;o.drawImage(tint(softAlpha(sil,size*.07),'#000'),size*.04,size*.06);o.globalAlpha=1}
+  if(cfg.ext){const dk=tint(sil,shade(outerCol,-.5));for(let i=Math.round(cfg.ext);i>=1;i--)o.drawImage(dk,i*.8,i)}
+  for(let i=stack.length-1;i>=0;i--)o.drawImage(tint(stack[i][0],stack[i][1]),0,0);
+  o.drawImage(tint(mask,fill),0,0);
+  if(cfg.hi){
+    const hl=tint(mask,'#fff'),hg=hl.getContext('2d');hg.globalCompositeOperation='destination-out';hg.drawImage(mask,size*.035,size*.035);
+    o.globalAlpha=.4;o.drawImage(hl,0,0);
+    const dk=tint(mask,'#000'),dg=dk.getContext('2d');dg.globalCompositeOperation='destination-out';dg.drawImage(mask,-size*.035,-size*.035);
+    o.globalAlpha=.22;o.drawImage(dk,0,0);o.globalAlpha=1;
+  }
+  // スプレーのムラ
+  const bl=mk(w,h),b=bl.getContext('2d');
+  for(let i=0;i<7;i++){
+    const x=R(an.minX,an.maxX),y=R(an.minY,an.maxY),r=R(size*.1,size*.35),gr=b.createRadialGradient(x,y,0,x,y,r),c=rnd()<.5?'255,255,255':'0,0,0';
+    gr.addColorStop(0,`rgba(${c},${R(.08,.18)})`);gr.addColorStop(1,`rgba(${c},0)`);b.fillStyle=gr;b.fillRect(0,0,w,h);
+  }
+  b.globalCompositeOperation='destination-in';b.drawImage(mask,0,0);o.drawImage(bl,0,0);
+  // オーバースプレー
+  const sd=softAlpha(sil,size*.12).getContext('2d').getImageData(0,0,w,h).data;
+  const sl=sil.getContext('2d').getImageData(0,0,w,h).data;
+  const cnt=Math.round(900*u*u),pad=size*.25;o.fillStyle=outerCol;
+  for(let i=0;i<cnt;i++){
+    const x=Math.floor(R(an.minX-pad,an.maxX+pad)),y=Math.floor(R(an.minY-pad,an.maxY+pad));
+    if(x<0||y<0||x>=w||y>=h)continue;
+    const a=sd[(y*w+x)*4+3]/255;
+    if(a>.04&&a<.85&&sl[(y*w+x)*4+3]<40&&rnd()<a*1.6){o.globalAlpha=R(.15,.7);o.beginPath();o.arc(x,y,R(.4,1.5)*Math.max(.8,u),0,6.3);o.fill()}
+  }
+  o.globalAlpha=1;
+  // ドリップ
+  if(dripAmt>0){
+    const od=o.getImageData(0,0,w,h).data;
+    const n=Math.round(dripAmt*(an.maxX-an.minX)/(size*.9)*R(.6,1.4));
+    for(let i=0;i<n;i++){
+      const x=Math.round(R(an.minX+3,an.maxX-3));let y0=-1;
+      for(let y=h-1;y>0;y--){if(od[(y*w+x)*4+3]>220){y0=y;break}}
+      if(y0<6)continue;
+      const idx=((y0-3)*w+x)*4,col=`rgb(${od[idx]},${od[idx+1]},${od[idx+2]})`;
+      const wd=Math.max(2,size*R(.012,.028));let len=size*R(.06,.4)*(.4+dripAmt/6);
+      if(y0+len+wd>=h)len=h-y0-wd-1;if(len<4)continue;
+      o.strokeStyle=col;o.fillStyle=col;o.lineCap='round';o.lineWidth=wd;
+      o.beginPath();o.moveTo(x,y0-wd);let cx=x;for(let yy=y0;yy<y0+len;yy+=6){cx+=R(-.25,.25);o.lineTo(cx,yy)}o.stroke();
+      o.beginPath();o.arc(cx,y0+len,wd*R(.6,.85),0,6.3);o.fill();
+    }
+  }
+  return out;
+}
+
+function genGlyph(ch,size,pal,opt){
+  const GW=Math.ceil(size*1.9),GH=Math.ceil(size*2.5),BY=size*1.2;
+  const isC=isCJK(ch),maxTry=opt.recog?6:1;
+  let best=null,bestScore=-99,tries=0;
+  for(let t=0;t<maxTry;t++){
+    tries++;
+    const k=Math.max(.15,1-t*.18)*opt.wild;
+    const safeTry = maxTry>1 && t>=maxTry-2;
+    const pool = safeTry ? SAFE() : FONTS.filter(f => !isC || f.jp);
+    const font = pick(pool.length?pool:GENERIC);
+    const dist={
+      rot:R(-.14,.14)*k, skew:R(-.35,.1)*k, sx:1+R(-.15,.2)*k, sy:1+R(-.1,.25)*k,
+      thick:size*R(0,.06)*(font.thin?1.7:1)*Math.min(1,.4+k), join:pick(['round','miter','bevel']),
+      italic:rnd()<.2*k, wobAmp:size*R(0,.022)*k, wobFreq:R(.02,.07)*(200/size), wobPh:R(0,6.28)
+    };
+    const shape=makeShape(ch,size,font,dist,GW,GH,BY);
+    const an=analyze(shape);if(!an)continue;
+    const rec=opt.recog?classify(an.vec,ch):null;
+    const sc=rec?(rec.ok?10:0)+rec.margin:0;
+    if(sc>bestScore){bestScore=sc;best={shape,an,font,rec,tries}}
+    if(!rec||rec.ok)break;
+  }
+  if(!best) return null;
+  best.tries=tries;
+  const cv=paintGlyph(best.shape,best.an,size,pal,opt.drip);
+  return {cv,minX:best.an.minX,maxX:best.an.maxX,BY,size,
+    info:{ch,font:best.font.n,rec:best.rec,tries}};
+}
+
+/* ---------- コンクリート壁 ---------- */
+let wall=null;
+function noiseLayer(g,w,h,alpha,comp){
+  const s=mk(w,h),sc=s.getContext('2d'),id=sc.createImageData(w,h);
+  for(let i=0;i<w*h;i++){const v=rnd()*255;id.data[i*4]=id.data[i*4+1]=id.data[i*4+2]=v;id.data[i*4+3]=255}
+  sc.putImageData(id,0,0);
+  g.globalAlpha=alpha;g.globalCompositeOperation=comp;g.imageSmoothingEnabled=true;g.drawImage(s,0,0,W,H);
+  g.globalAlpha=1;g.globalCompositeOperation='source-over';
+}
+function crack(g,x,y,ang,steps,wd,depth){
+  const pts=[[x,y]],branches=[];
+  for(let i=0;i<steps;i++){
+    const l=R(5,14);ang+=R(-.55,.55);x+=Math.cos(ang)*l;y+=Math.sin(ang)*l;pts.push([x,y]);
+    if(rnd()<.06&&depth<3)branches.push([x,y,ang+R(-1.1,1.1),Math.floor(steps*R(.2,.5)),wd*.6]);
+  }
+  const path=(dx,dy)=>{g.beginPath();pts.forEach((p,i)=>i?g.lineTo(p[0]+dx,p[1]+dy):g.moveTo(p[0]+dx,p[1]+dy));g.stroke()};
+  g.lineCap='round';g.lineJoin='round';
+  g.strokeStyle='rgba(235,235,230,.22)';g.lineWidth=wd;path(1.3,1.3);
+  g.strokeStyle='rgba(24,22,20,.78)';g.lineWidth=wd;path(0,0);
+  branches.forEach(b=>crack(g,b[0],b[1],b[2],b[3],Math.max(.6,b[4]),depth+1));
+}
+function genWall(seed,kind){
+  rnd=mulberry32(seed);
+  if(kind==='auto')kind=pick(['clean','cracked','stained','cracked','stained']);
+  // ベース
+  const base=mk(W,H),b=base.getContext('2d');
+  b.fillStyle=pick(['#8f8d89','#9a9894','#85847f','#a09d96']);b.fillRect(0,0,W,H);
+  [[8,5,.5],[32,20,.45],[120,75,.38],[400,250,.34],[1600,1000,.2]].forEach(([w,h,a])=>noiseLayer(b,w,h,a,'overlay'));
+  // 雨だれ・汚れ
+  const nStreak = kind==='stained'?46:kind==='cracked'?18:12;
+  for(let i=0;i<nStreak;i++){
+    const x=R(0,W),w=R(8,70),y=R(-100,H*.6),l=R(200,H),gr=b.createLinearGradient(0,y,0,y+l);
+    const rust=rnd()<.25,c=rust?'110,70,40':'30,28,26',a=R(.03,kind==='stained'?.2:.1);
+    gr.addColorStop(0,`rgba(${c},0)`);gr.addColorStop(.3,`rgba(${c},${a})`);gr.addColorStop(1,`rgba(${c},0)`);
+    b.fillStyle=gr;b.fillRect(x,y,w,l);
+  }
+  for(let i=0;i<14;i++){
+    const x=R(0,W),y=R(0,H),r=R(80,320),gr=b.createRadialGradient(x,y,0,x,y,r),dark=rnd()<.6;
+    gr.addColorStop(0,dark?`rgba(40,38,34,${R(.05,.14)})`:`rgba(230,228,220,${R(.05,.12)})`);gr.addColorStop(1,'rgba(0,0,0,0)');
+    b.fillStyle=gr;b.fillRect(x-r,y-r,r*2,r*2);
+  }
+  // オーバーレイ（塗料の上に重ねる凹凸）
+  const ov=mk(W,H),g=ov.getContext('2d');
+  const gid=g.createImageData(W,H),gd=gid.data;
+  for(let i=0;i<W*H;i++){const v=rnd(),a=Math.abs(v-.5)*2;gd[i*4]=gd[i*4+1]=gd[i*4+2]=v<.5?0:255;gd[i*4+3]=a*a*a*60}
+  g.putImageData(gid,0,0);
+  // 型枠の継ぎ目
+  const pw=R(520,640),ph=R(470,560),ox=R(-120,120),oy=R(-80,80);
+  const seam=(x1,y1,x2,y2)=>{
+    const pts=[],n=Math.ceil(Math.hypot(x2-x1,y2-y1)/40);
+    for(let i=0;i<=n;i++){const t=i/n;pts.push([x1+(x2-x1)*t+(x1===x2?R(-1.2,1.2):0),y1+(y2-y1)*t+(y1===y2?R(-1.2,1.2):0)])}
+    [['rgba(235,235,230,.28)',2.2,2,2],['rgba(20,18,16,.6)',3,0,0]].forEach(([c,wd,dx,dy])=>{
+      g.strokeStyle=c;g.lineWidth=wd;g.beginPath();pts.forEach((p,i)=>i?g.lineTo(p[0]+dx,p[1]+dy):g.moveTo(p[0]+dx,p[1]+dy));g.stroke()});
+  };
+  for(let x=ox+pw;x<W;x+=pw)seam(x,0,x,H);
+  for(let y=oy+ph;y<H;y+=ph)seam(0,y,W,y);
+  // セパレーター穴
+  for(let x=ox+pw/2-pw;x<W+pw;x+=pw/2) for(let y=oy+ph/3-ph;y<H+ph;y+=ph/3*2){
+    if(x<20||y<20||x>W-20||y>H-20)continue;
+    const st=g.createLinearGradient(0,y,0,y+R(60,160));st.addColorStop(0,'rgba(90,60,40,.28)');st.addColorStop(1,'rgba(90,60,40,0)');
+    g.fillStyle=st;g.fillRect(x-7,y,14,160);
+    const rg=g.createRadialGradient(x,y,1,x,y,13);rg.addColorStop(0,'rgba(15,14,12,.95)');rg.addColorStop(.6,'rgba(30,28,25,.8)');rg.addColorStop(1,'rgba(200,198,190,.35)');
+    g.fillStyle=rg;g.beginPath();g.arc(x,y,13,0,6.3);g.fill();
+  }
+  // 気泡跡
+  for(let i=0;i<650;i++){
+    const x=R(0,W),y=R(0,H),r=R(.6,3.2);
+    g.fillStyle=`rgba(25,23,21,${R(.25,.6)})`;g.beginPath();g.ellipse(x,y,r,r*R(.7,1),R(0,3),0,6.3);g.fill();
+    g.fillStyle='rgba(235,235,228,.22)';g.beginPath();g.arc(x+r*.5,y+r*.6,r*.6,0,6.3);g.fill();
+  }
+  // ひび割れ
+  const nc = kind==='cracked'?RINT(6,9):kind==='stained'?RINT(2,4):RINT(0,2);
+  for(let i=0;i<nc;i++)crack(g,R(0,W),R(0,H),R(0,6.28),RINT(25,70),R(1.2,2.4),0);
+  // ライティング（乗算）
+  const shd=mk(W,H),s=shd.getContext('2d');
+  s.fillStyle='#fff';s.fillRect(0,0,W,H);
+  const lg=s.createRadialGradient(W*R(.35,.65),H*R(.25,.5),H*.1,W/2,H/2,W*.75);lg.addColorStop(0,'rgba(255,255,255,0)');lg.addColorStop(1,'rgba(40,38,36,.62)');
+  s.fillStyle=lg;s.fillRect(0,0,W,H);
+  noiseLayer(s,6,4,.25,'multiply');
+  // 塗料の穴（ポア）
+  const pores=mk(W,H),pg=pores.getContext('2d');
+  const pn=mk(W,H),pn2=pn.getContext('2d');
+  noiseLayer(pn2,800,500,1,'source-over');noiseLayer(pn2,1600,1000,.45,'overlay');
+  const pi=pn2.getImageData(0,0,W,H),pd=pi.data;
+  for(let i=0;i<W*H;i++){const v=pd[i*4];pd[i*4]=pd[i*4+1]=pd[i*4+2]=0;pd[i*4+3]=v>232?255:(v>215?110:0)}
+  pg.putImageData(pi,0,0);
+  wall={seed,kind,base,overlay:ov,shade:shd,pores};
+}
+function RINT(a,b){return Math.floor(R(a,b+1))}
+
+/* ---------- レイアウトと描画 ---------- */
+function wrapLines(text,size){
+  const maxW=W-2*MARGIN,out=[];
+  for(const para of text.split('\n')){
+    let cur=[],w=0;
+    const cw=ch=>ch===' '||ch==='　'?.35:(isCJK(ch)?1:.78);
+    for(const ch of [...para]){
+      const c=cw(ch)*size;
+      if(w+c>maxW&&cur.length){
+        const ls=cur.lastIndexOf(' ');
+        if(ls>0&&ch!==' '){out.push(cur.slice(0,ls).join(''));cur=cur.slice(ls+1)}else{out.push(cur.join('').trimEnd());cur=[]}
+        w=cur.reduce((a,x)=>a+cw(x)*size,0);
+      }
+      cur.push(ch);w+=c;
+    }
+    out.push(cur.join('').trimEnd());
+  }
+  while(out.length>1&&out[out.length-1]==='')out.pop();
+  return out;
+}
+function chooseSize(text,manual){
+  if(manual>0)return {size:manual,lines:wrapLines(text,manual)};
+  for(let s=300;s>=40;s-=10){const l=wrapLines(text,s);if(l.length*s*1.08<=H-2*MARGIN)return {size:s,lines:l}}
+  return {size:40,lines:wrapLines(text,40)};
+}
+function palFor(mode,fixed){
+  if(mode==='mix')return pick(PALETTES);
+  if(mode==='mono')return fixed.mono;
+  if(mode==='custom')return fixed.custom;
+  return fixed.one;
+}
+
+const state={wallSeed:(Math.random()*1e9)|0,textSeed:(Math.random()*1e9)|0};
+let token=0,lastText='';
+const el={txt:$('#txt'),size:$('#size'),drip:$('#drip'),wild:$('#wild'),mode:$('#colorMode'),custom:$('#custom'),kind:$('#wallKind'),recog:$('#useRecog'),busy:$('#busy')};
+
+function busy(msg){el.busy.textContent=msg||'';el.busy.classList.toggle('on',!!msg)}
+
+async function render(){
+  const my=++token;
+  busy('フォントを準備中…');
+  await fontsReady;
+  if(my!==token)return;
+  const text=el.txt.value.replace(/\r/g,'').slice(0,100);
+  lastText=text;
+  if(!wall||wall.seed!==state.wallSeed||wall.reqKind!==el.kind.value){
+    busy('壁を生成中…');await tick();
+    genWall(state.wallSeed,el.kind.value);wall.reqKind=el.kind.value;
+  }
+  if(!text.trim()){drawComposite(mk(W,H));$('#recog').innerHTML='';$('#sum').textContent='文字を入力してください';busy('');return}
+  setCandidates(text);
+  rnd=mulberry32(state.textSeed);
+  const manual=+el.size.value,{size,lines}=chooseSize(text,manual);
+  const wildV=+el.wild.value/6; // 0..~1.67
+  const cv=el.custom.value,cl=lum(cv)>.55;
+  const fixed={
+    one:pick(PALETTES),mono:PALETTES[RINT(3,4)],
+    custom:{fills:[cv],line:cl?'#111111':'#f5f5f5',acc:[cl?'#111111':'#ffffff',shade(cv,.45)]}
+  };
+  const opt={recog:el.recog.checked,drip:+el.drip.value,wild:wildV};
+  const total=[...text].filter(c=>c.trim()).length;let done=0;const infos=[];
+  const rows=[];const t0=performance.now();
+  for(const line of lines){
+    const row=[];
+    for(const ch of [...line]){
+      if(ch===' '||ch==='　'){row.push({sp:true});continue}
+      const g=genGlyph(ch,size,palFor(el.mode.value,fixed),opt);
+      done++;busy(`生成中 ${done}/${total}`);
+      if(g){row.push(g);infos.push(g.info)}else row.push({sp:true});
+      await tick();if(my!==token)return;
+    }
+    rows.push(row);
+  }
+  // レイアウト
+  const lay=rows.map(row=>{let w=0;const items=row.map(g=>{
+    if(g.sp)return {adv:size*.35,g:null};
+    const bw=g.maxX-g.minX,gap=size*R(-.03,.08);return {adv:bw+gap,bw,g};
+  });items.forEach(i=>w+=i.adv);return {items,w}});
+  const maxW=Math.max(...lay.map(l=>l.w),1),lineH=size*1.08,totH=lay.length*lineH;
+  const s=Math.min(1,(W-2*MARGIN)/maxW,(H-2*MARGIN)/totH);
+  const paint=mk(W,H),pc=paint.getContext('2d');
+  pc.translate(W/2,H/2);pc.rotate(R(-.04,.04));pc.translate(-W/2,-H/2);
+  lay.forEach((l,li)=>{
+    let x=W/2-l.w*s/2;const base=H/2-totH*s/2+(li+.5)*lineH*s+size*s*.36;
+    l.items.forEach(it=>{
+      if(it.g){
+        const g=it.g,bw=it.bw*s,cx0=(g.minX+g.maxX)/2;
+        pc.save();
+        pc.translate(x+bw/2,base-size*s*.35+R(-.05,.05)*size*s);pc.rotate(R(-.08,.08));
+        pc.drawImage(g.cv,-cx0*s,size*s*.35-g.BY*s,g.cv.width*s,g.cv.height*s);
+        pc.restore();
+      }
+      x+=it.adv*s;
+    });
+  });
+  drawComposite(paint);
+  showRecog(infos,opt.recog,Math.round(performance.now()-t0));
+  busy('');
+}
+
+function drawComposite(paint){
+  const pc=paint.getContext('2d');
+  pc.globalCompositeOperation='destination-out';pc.globalAlpha=.9;pc.drawImage(wall.pores,0,0);
+  pc.globalAlpha=1;pc.globalCompositeOperation='source-over';
+  ctx.globalCompositeOperation='source-over';ctx.clearRect(0,0,W,H);
+  ctx.drawImage(wall.base,0,0);
+  ctx.save();ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=3;ctx.shadowOffsetX=1.5;ctx.shadowOffsetY=2;ctx.drawImage(paint,0,0);ctx.restore();
+  ctx.drawImage(wall.overlay,0,0);
+  ctx.globalCompositeOperation='multiply';ctx.drawImage(wall.shade,0,0);ctx.globalCompositeOperation='source-over';
+}
+
+function showRecog(infos,on,ms){
+  const box=$('#recog');box.innerHTML='';
+  if(!on){$('#sum').textContent=`識別チェックOFF（生成 ${ms}ms）`;return}
+  let ok=0,retry=0;
+  infos.forEach(i=>{
+    const r=i.rec,good=r&&r.ok;if(good)ok++;if(i.tries>1)retry++;
+    const d=document.createElement('div');d.className='chip '+(good?'ok':'ng');
+    d.innerHTML=`<b></b>${r?(good?'✓ ':'△ ')+r.tScore.toFixed(2):''}${i.tries>1?` <span style="color:#ffd60a">×${i.tries}</span>`:''}<small></small>`;
+    d.querySelector('b').textContent=i.ch;d.querySelector('small').textContent=i.font;
+    d.title=r?`識別結果: 「${r.guess}」 / 目的文字との類似度 ${r.tScore.toFixed(2)} / 他候補との差 ${r.margin.toFixed(2)}`:'';
+    box.appendChild(d);
+  });
+  $('#sum').textContent=`${infos.length}文字中 ${ok}文字が判読OK／やり直し ${retry}文字（${ms}ms・使用可能フォント ${FONTS.length}種）`;
+}
+
+/* ---------- UI ---------- */
+let deb=null;
+const later=()=>{clearTimeout(deb);deb=setTimeout(render,380)};
+el.txt.addEventListener('input',later);
+[el.size,el.drip,el.wild].forEach(e=>e.addEventListener('input',()=>{
+  $('#sizeO').textContent=+el.size.value?el.size.value:'自動';$('#dripO').textContent=el.drip.value;$('#wildO').textContent=el.wild.value;later();
+}));
+el.mode.addEventListener('change',()=>{el.custom.hidden=el.mode.value!=='custom';render()});
+el.custom.addEventListener('input',later);
+el.kind.addEventListener('change',()=>{state.wallSeed=(Math.random()*1e9)|0;render()});
+el.recog.addEventListener('change',render);
+$('#btnRe').addEventListener('click',()=>{state.textSeed=(Math.random()*1e9)|0;render()});
+$('#btnWall').addEventListener('click',()=>{state.wallSeed=(Math.random()*1e9)|0;render()});
+$('#btnSave').addEventListener('click',()=>{
+  wallCv.toBlob(b=>{
+    try{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='graffiti-'+Date.now()+'.png';document.body.appendChild(a);a.click();a.remove();
+      $('#saveNote').textContent='保存を試みました。ダウンロードされない環境では「画像をコピー」か、キャンバスの長押し／右クリックで保存してください。'}
+    catch(e){$('#saveNote').textContent='この環境では保存できませんでした。「画像をコピー」をお試しください。'}
+  });
+});
+$('#btnCopy').addEventListener('click',async()=>{
+  try{
+    const b=await new Promise(r=>wallCv.toBlob(r));
+    await navigator.clipboard.write([new ClipboardItem({'image/png':b})]);
+    $('#saveNote').textContent='画像をクリップボードにコピーしました。';
+  }catch(e){$('#saveNote').textContent='コピーできませんでした。キャンバスを右クリック（長押し）して画像を保存してください。'}
+});
+
+// 初期表示：壁だけ先に描いておく
+render();
+window.__tagger={render,state,get info(){return lastText}};
+})();
+</script>
+</body>
+</html>
